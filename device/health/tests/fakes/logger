@@ -1,0 +1,5 @@
+#!/bin/sh
+# Fake logger: records the invocation.
+if [ $# -gt 0 ]; then line="logger $*"; else line="logger"; fi
+echo "$line" >> "${FAKE_LOG:?FAKE_LOG not set}"
+exit 0

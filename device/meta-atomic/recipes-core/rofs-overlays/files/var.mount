@@ -1,0 +1,20 @@
+# NOTE: authored for the org CI runners; NOT built/validated in this workspace.
+# Bind-mount /var from the data partition (design.md §7.1). /data/var is
+# seeded once from the pristine rootfs /var by atomic-data-seed.service.
+
+[Unit]
+Description=Persistent /var from /data
+DefaultDependencies=no
+Conflicts=umount.target
+Requires=data.mount atomic-data-seed.service
+After=data.mount atomic-data-seed.service
+Before=local-fs.target umount.target
+
+[Mount]
+What=/data/var
+Where=/var
+Type=none
+Options=bind
+
+[Install]
+WantedBy=local-fs.target

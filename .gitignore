@@ -1,0 +1,78 @@
+# Secrets / generated PKI material — never commit
+# Anchored: a bare `pki/` also matches (and hides) the tracked scripts/pki/ sources.
+/pki/
+# Backstop for private keys that land outside /pki/ (the runbooks in docs/ write
+# device.key.pem etc. into the cwd); the trailing * covers .new / .expired copies.
+*.key.pem*
+*.csr.pem
+# Scratch files from the first-enrollment walkthrough in docs/operations.md
+# (cookies.txt is a live admin session).
+/cookies.txt
+/enroll*.json
+/device.cert.pem
+
+# Build artifacts
+/bin/
+/out/
+*.raucb
+*.raucb.meta.json
+device/health/atomic-health
+device/health/*.o
+# `go build ./cmd/...` without -o drops the binary into the module dir
+/server/atomic-server
+/device/agent/atomic-agent
+
+# Yocto / kas (device/meta-atomic/README.md; CI sets KAS_WORK_DIR to ./build)
+/build/
+/device/meta-atomic/build/
+# kas clones each layer repo into its work dir, named by the repo key
+poky/
+meta-openembedded/
+meta-raspberrypi/
+meta-rauc/
+meta-rauc-community/
+# externalsrc puts these symlinks into the source dirs it points at
+# (device/agent, device/health); symlinks, so no trailing slash
+oe-workdir
+oe-logs
+*.wic
+*.wic.bmap
+*.ext4
+
+# CI outputs / caches, left behind when the jobs' commands are run locally
+/.cache/
+/staging-sha256.txt
+/publish-manifest.json
+/e2e/logs/
+
+# Node / UI
+node_modules/
+server/ui/dist/
+# vite empties this dir on every build. index.html stays trackable so that
+# `//go:embed all:dist` still has a file to embed on a fresh clone.
+server/internal/web/dist/*
+!server/internal/web/dist/.gitkeep
+!server/internal/web/dist/index.html
+# vite leaves its bundled config behind if it crashes (package.json is type: module)
+server/ui/vite.config.*.timestamp-*
+
+# Go
+*.test
+coverage.out
+coverage-func.txt
+
+# Local env / config
+.env
+.env.*
+!.env.example
+*.log
+/device/agent/agent.conf
+compose.override.y*ml
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store

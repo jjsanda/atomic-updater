@@ -1,0 +1,14 @@
+[Unit]
+Description=Post-boot health check for atomic-updater
+After=network-online.target app.service
+Requires=app.service
+Before=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/atomic-updater/atomic-health
+TimeoutStartSec=120
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

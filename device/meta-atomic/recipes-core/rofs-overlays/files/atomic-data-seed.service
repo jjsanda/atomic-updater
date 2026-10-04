@@ -1,0 +1,24 @@
+# NOTE: authored for the org CI runners; NOT built/validated in this workspace.
+# First-boot (and idempotent every-boot) seeding of /data via
+# systemd-tmpfiles (design.md §7.1). tmpfiles 'd' lines create the overlay/
+# state directories; 'C' lines copy pristine /var and /home content from the
+# read-only rootfs ONLY when the target does not exist yet — i.e. exactly
+# once, on first boot with a fresh data partition.
+
+[Unit]
+Description=Seed /data with writable state (atomic-updater)
+DefaultDependencies=no
+Conflicts=shutdown.target
+RequiresMountsFor=/data
+After=data.mount
+Before=etc.mount var.mount home.mount local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Passing the config as an absolute positional path processes ONLY this
+# manifest, independent of the stock tmpfiles.d directories.
+ExecStart=/usr/bin/systemd-tmpfiles --create /usr/lib/atomic-updater/atomic-data-seed.conf
+
+[Install]
+WantedBy=local-fs.target

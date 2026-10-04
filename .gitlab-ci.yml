@@ -1,0 +1,21 @@
+# atomic-updater GitLab CI entrypoint.
+# Stage definitions live in ci/*.yml (see docs/design.md §14).
+
+stages:
+  - lint
+  - build:device
+  - build:server
+  - test:unit
+  - test:integration
+  - sign
+  - publish
+
+include:
+  - local: ci/lint.yml
+  - local: ci/build-image.yml
+  - local: ci/build-server.yml
+  - local: ci/qemu-test.yml
+  - local: ci/sign-and-publish.yml
+
+variables:
+  GIT_DEPTH: "1"

@@ -1,0 +1,13 @@
+{
+  "slot": "A",
+  "version": "1.0.0",
+  "bundle_id": null,
+  "boot_count": 7,
+  "uptime_s": 123,
+  "healthy": true,
+  "last_update": {
+    "outcome": "none",
+    "bundle_id": null,
+    "reason": ""
+  }
+}

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Fake fw_setenv: records the invocation, exits per FAKE_FW_SETENV_EXIT.
+if [ $# -gt 0 ]; then line="fw_setenv $*"; else line="fw_setenv"; fi
+echo "$line" >> "${FAKE_LOG:?FAKE_LOG not set}"
+exit "${FAKE_FW_SETENV_EXIT:-0}"

@@ -1,0 +1,19 @@
+{
+  "events": [
+    {
+      "event_type": "install-ok",
+      "payload": {
+        "rollout_id": "0d2f4a9e-1111-4222-8333-444455556666",
+        "bundle_id": "9e8d7c6b-5a49-4838-a7b6-c5d4e3f2a1b0",
+        "version": "1.1.0"
+      }
+    },
+    {
+      "event_type": "rollback",
+      "payload": {
+        "bundle_id": "9e8d7c6b-5a49-4838-a7b6-c5d4e3f2a1b0",
+        "reason": "health: probe 50-http-selfcheck.sh exit 1"
+      }
+    }
+  ]
+}

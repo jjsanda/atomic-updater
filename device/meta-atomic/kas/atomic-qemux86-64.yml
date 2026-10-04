@@ -1,0 +1,118 @@
+# NOTE: authored for the org CI runners; NOT built/validated in this workspace.
+#
+# kas project file — qemux86-64 build of atomic-image + atomic-bundle
+# (design.md §6.2 x86/EFI, §6.3 Yocto Scarthgap, §7.1–§7.3, §14 CI stage
+# "build:device").
+#
+# Usage, from a *git checkout* of the atomic-updater monorepo (kas resolves
+# the url-less repo below via git, so a plain directory copy is not enough):
+#
+#   kas build device/meta-atomic/kas/atomic-qemux86-64.yml
+#
+# or, from inside device/meta-atomic:
+#
+#   kas build kas/atomic-qemux86-64.yml
+#
+# PINNING: repos below are pinned by BRANCH NAME ONLY. We deliberately do not
+# write commit SHAs because nothing was fetched or verified in this
+# workspace and invented SHAs would be worse than none. The FIRST real build
+# on the org CI runner MUST add a `commit:` line to every remote repo
+# (kas records them via `kas dump --lock`).
+
+header:
+  version: 14   # kas >= 4.0; VERIFY-ON-BUILDER against the runner's kas
+
+machine: qemux86-64
+distro: poky
+
+target:
+  - atomic-image
+  - atomic-bundle
+
+repos:
+  atomic-updater:
+    # No url: this is the repo containing this kas file (the monorepo).
+    # Only device/meta-atomic is a BitBake layer; agent/health sources are
+    # reached from recipes via externalsrc relative paths.
+    layers:
+      device/meta-atomic:
+
+  poky:
+    url: "https://git.yoctoproject.org/poky"
+    branch: scarthgap
+    # commit: <PIN-ON-FIRST-REAL-BUILD>
+    layers:
+      meta:
+      meta-poky:
+
+  meta-openembedded:
+    url: "https://git.openembedded.org/meta-openembedded"
+    branch: scarthgap
+    # commit: <PIN-ON-FIRST-REAL-BUILD>
+    layers:
+      meta-oe:          # efibootmgr (RAUC efi backend runtime dependency)
+      meta-python:      # layer dependency of meta-networking
+      meta-networking:  # chrony (health check §7.4 step 4)
+
+  meta-rauc:
+    url: "https://github.com/rauc/meta-rauc.git"
+    branch: scarthgap
+    # commit: <PIN-ON-FIRST-REAL-BUILD>
+    # repo root is the layer itself -> no `layers:` key needed
+
+  meta-rauc-community:
+    url: "https://github.com/rauc/meta-rauc-community.git"
+    # VERIFY-ON-BUILDER: confirm meta-rauc-community has a scarthgap branch on
+    # the pinned date; fall back to master (and pin the SHA) if it does not.
+    branch: scarthgap
+    # commit: <PIN-ON-FIRST-REAL-BUILD>
+    layers:
+      # Reference integration for RAUC-on-qemu (GRUB/EFI demo content).
+      # CAUTION (documented decision): this layer ships its own
+      # rauc_%.bbappend/system.conf. meta-atomic is higher priority (10) and
+      # installs its system.conf in do_install:append from a unique
+      # subdirectory, so ours wins; a reviewer must confirm on the first
+      # build (see README "validate first").
+      meta-rauc-qemux86:
+
+env:
+  # Signing material injection (design.md §9.2): CI exports these as
+  # ABSOLUTE PATHS to the dev signing key/cert and the CA keyring before
+  # calling kas. kas adds them to BB_ENV_PASSTHROUGH_ADDITIONS so they become
+  # BitBake variables consumed by meta-rauc's bundle.bbclass (atomic-bundle)
+  # and by our rauc_%.bbappend (keyring installed as /etc/rauc/ca.cert.pem).
+  # CI-built bundles are signed with the DEV key only; release bundles are
+  # re-signed on the isolated "signer" runner (rauc resign), per docs §9.2.
+  RAUC_KEY_FILE: null
+  RAUC_CERT_FILE: null
+  RAUC_KEYRING_FILE: null
+  # Set ATOMIC_DEV_IMAGE=1 for a development image (ssh server, dev user,
+  # debug-tweaks). MUST stay unset/0 for anything leaving the lab.
+  ATOMIC_DEV_IMAGE: null
+
+local_conf_header:
+  atomic-init: |
+    # systemd as the (only) init manager
+    INIT_MANAGER = "systemd"
+    # "rauc" is a project marker feature per design.md §6.3; meta-rauc does
+    # not itself require a distro feature. Harmless, kept for greppability.
+    DISTRO_FEATURES:append = " rauc"
+
+  atomic-reproducible: |
+    # design.md §6.3: reproducible builds required. Scarthgap enables binary
+    # reproducibility by default; BB_REPRODUCIBLE_BUILD is the name used in
+    # the design doc and is kept for traceability.
+    # VERIFY-ON-BUILDER: the effective oe-core knob is
+    # BUILD_REPRODUCIBLE_BINARIES (default "1" in scarthgap).
+    BB_REPRODUCIBLE_BUILD = "1"
+    BUILD_REPRODUCIBLE_BINARIES = "1"
+
+  atomic-image: |
+    # ext4 feeds the RAUC bundle slot image; wic is the flashable disk image
+    IMAGE_FSTYPES:append = " ext4 wic wic.bmap"
+    WKS_FILE = "atomic-x86-efi.wks.in"
+    MACHINE_FEATURES:append = " efi"
+    EFI_PROVIDER = "grub-efi"
+
+  atomic-passthrough: |
+    BB_ENV_PASSTHROUGH_ADDITIONS:append = " ATOMIC_DEV_IMAGE"

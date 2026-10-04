@@ -1,0 +1,11 @@
+#!/bin/bash
+# fw_printenv shim (debugging + test assertions).
+set -euo pipefail
+source /usr/lib/atomic-updater/sim-env.sh
+if [[ $# -eq 0 ]]; then
+    cat "$SIM_ENV_FILE" 2>/dev/null || true
+else
+    for key in "$@"; do
+        printf '%s=%s\n' "$key" "$(env_get "$key")"
+    done
+fi

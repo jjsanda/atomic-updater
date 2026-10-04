@@ -1,0 +1,25 @@
+---
+# ci/shared/sstate-cache.yml — shared Yocto SSTATE / DL_DIR cache wiring
+# (design.md §6.5, §14: warm-cache device builds under ~15 min).
+#
+# NOTE: this targets the org's GitLab runners, not this development
+# workspace. Runners tagged `yocto-cache` mount an S3-backed volume at
+# /mnt/yocto-cache (s3fs/rclone mount maintained on the runner host — see
+# ci/shared/runners.md for the runner-side config). Consumed via
+# `extends: .yocto-s3-cache` from ci/build-image.yml.
+
+.yocto-s3-cache:
+  variables:
+    # Mount point provided by the runner host (docker volume in config.toml).
+    YOCTO_CACHE_MOUNT: /mnt/yocto-cache
+    SSTATE_DIR: ${YOCTO_CACHE_MOUNT}/sstate
+    DL_DIR: ${YOCTO_CACHE_MOUNT}/downloads
+    # S3 backing store behind the mount. Informational for runner
+    # provisioning — jobs never talk to it directly; they only see the
+    # filesystem mount above.
+    YOCTO_CACHE_S3_ENDPOINT: https://s3.internal.example.com
+    YOCTO_CACHE_S3_BUCKET: yocto-ci-cache
+    # kas honors SSTATE_DIR / DL_DIR from the environment natively (writes
+    # them into local.conf); no BB_ENV_PASSTHROUGH_ADDITIONS needed here.
+    # Signing-material env (RAUC_*) is declared per kas config in its own
+    # `env:` block (device/meta-atomic/kas/*.yml).

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Fake reboot command: records the invocation (used via ATOMIC_REBOOT_CMD).
+if [ $# -gt 0 ]; then line="fakereboot $*"; else line="fakereboot"; fi
+echo "$line" >> "${FAKE_LOG:?FAKE_LOG not set}"
+exit "${FAKE_REBOOT_EXIT:-0}"

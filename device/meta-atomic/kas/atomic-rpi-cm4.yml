@@ -1,0 +1,121 @@
+# NOTE: authored for the org CI runners; NOT built/validated in this workspace.
+#
+# kas project file — Raspberry Pi CM4 build of atomic-image + atomic-bundle
+# (design.md §6.2 ARM/U-Boot RAUC bootmeth, §6.3, §7.1–§7.3, §14).
+#
+# MACHINE NAMING (documented decision): upstream meta-raspberrypi on
+# scarthgap has NO "raspberrypi-cm4" or "rpi-cm4" machine. The Compute
+# Module 4 is covered by the raspberrypi4-64 machine (BCM2711 family:
+# Pi 4B / Pi 400 / CM4), so that is what we set here. The fleet-level
+# hardware_type string stays "rpi-cm4" (docs/api.md) — that is an
+# application identifier, not a Yocto machine name.
+#
+# Usage, from a *git checkout* of the atomic-updater monorepo:
+#
+#   kas build device/meta-atomic/kas/atomic-rpi-cm4.yml
+#
+# PINNING: branch names only — the FIRST real build on the org CI runner
+# MUST pin exact commit SHAs (`commit:` per repo, or `kas dump --lock`).
+# No SHAs are written here because none were fetched/verified in this
+# workspace.
+
+header:
+  version: 14   # kas >= 4.0; VERIFY-ON-BUILDER against the runner's kas
+
+machine: raspberrypi4-64
+distro: poky
+
+target:
+  - atomic-image
+  - atomic-bundle
+
+repos:
+  atomic-updater:
+    # No url: the repo containing this kas file (the monorepo).
+    layers:
+      device/meta-atomic:
+
+  poky:
+    url: "https://git.yoctoproject.org/poky"
+    branch: scarthgap
+    # commit: <PIN-ON-FIRST-REAL-BUILD>
+    layers:
+      meta:
+      meta-poky:
+
+  meta-openembedded:
+    url: "https://git.openembedded.org/meta-openembedded"
+    branch: scarthgap
+    # commit: <PIN-ON-FIRST-REAL-BUILD>
+    layers:
+      meta-oe:
+      meta-python:      # layer dependency of meta-networking
+      meta-networking:  # chrony (health check §7.4 step 4)
+
+  meta-raspberrypi:
+    url: "https://git.yoctoproject.org/meta-raspberrypi"
+    branch: scarthgap
+    # commit: <PIN-ON-FIRST-REAL-BUILD>
+
+  meta-rauc:
+    url: "https://github.com/rauc/meta-rauc.git"
+    branch: scarthgap
+    # commit: <PIN-ON-FIRST-REAL-BUILD>
+
+  meta-rauc-community:
+    url: "https://github.com/rauc/meta-rauc-community.git"
+    # VERIFY-ON-BUILDER: confirm the scarthgap branch exists; fall back to
+    # master (and pin the SHA) if it does not.
+    branch: scarthgap
+    # commit: <PIN-ON-FIRST-REAL-BUILD>
+    layers:
+      # Reference RAUC integration for RPi. CAUTION (documented decision):
+      # this community layer implements A/B via a legacy U-Boot boot.scr
+      # script and may bbappend u-boot/rauc itself. meta-atomic instead uses
+      # the upstream U-Boot RAUC bootmeth (design.md §6.2) and overrides
+      # system.conf from a higher-priority layer. On the first real build,
+      # review `bitbake-layers show-appends u-boot rauc` and drop this layer
+      # from the stack if its appends fight ours (see README).
+      meta-rauc-raspberrypi:
+
+env:
+  # See atomic-qemux86-64.yml — identical signing injection contract
+  # (design.md §9.2): CI exports absolute paths; dev key signs CI bundles;
+  # the isolated "signer" runner re-signs for release (rauc resign).
+  RAUC_KEY_FILE: null
+  RAUC_CERT_FILE: null
+  RAUC_KEYRING_FILE: null
+  ATOMIC_DEV_IMAGE: null
+
+local_conf_header:
+  atomic-init: |
+    INIT_MANAGER = "systemd"
+    DISTRO_FEATURES:append = " rauc"
+
+  atomic-reproducible: |
+    # design.md §6.3; see the qemux86-64 kas file for the naming note.
+    BB_REPRODUCIBLE_BUILD = "1"
+    BUILD_REPRODUCIBLE_BINARIES = "1"
+
+  atomic-image: |
+    IMAGE_FSTYPES:append = " ext4 wic wic.bmap"
+    WKS_FILE = "atomic-rpi.wks.in"
+
+  atomic-rpi-uboot: |
+    # Boot chain: RPi firmware -> u-boot.bin (kernel= in config.txt) ->
+    # U-Boot bootstd with RAUC bootmeth (recipes-bsp/u-boot in this layer).
+    RPI_USE_U_BOOT = "1"
+    ENABLE_UART = "1"
+    # uboot.env (initial A/B environment, built with mkenvimage in our
+    # u-boot bbappend do_deploy) is copied into the FAT boot partition by
+    # wic bootimg-partition:
+    IMAGE_BOOT_FILES:append = " uboot.env"
+    # VERIFY-ON-BUILDER: CONFIG_BOOTMETH_RAUC is upstream from U-Boot
+    # v2025.01; scarthgap's default u-boot recipe is older (2024.01).
+    # The first real build must either set PREFERRED_VERSION_u-boot to a
+    # mixin/backport recipe providing >= v2025.01 or carry the bootmeth
+    # patches. Tracked in device/meta-atomic/README.md ("validate first").
+    # PREFERRED_VERSION_u-boot = "<set on first real build>"
+
+  atomic-passthrough: |
+    BB_ENV_PASSTHROUGH_ADDITIONS:append = " ATOMIC_DEV_IMAGE"

@@ -1,0 +1,157 @@
+---
+# ci/sign-and-publish.yml — `sign` (signer-class runner) and `publish`.
+#
+# NOTE: these jobs target the org's GitLab runners (the dedicated `signer`
+# runner and the `docker` class — see ci/shared/runners.md); they are NOT
+# runnable in this development workspace.
+#
+# Signing model — adaptation of design.md §9.2: RAUC cannot emit unsigned
+# bundles, so "CI produces an unsigned bundle" is implemented as "CI signs
+# with an ephemeral per-pipeline dev key" (ci/build-image.yml). This stage
+# re-signs (`rauc resign`) with the release certificate, which exists only
+# on the signer runner. Devices trust only the production root, so staging
+# bundles are inert outside CI. Full rationale: docs/security.md §7.
+#
+# The .meta.json sidecar written below is the contract from docs/api.md
+# §2.3. bundle/make-meta.sh did not exist when this file was written
+# (checked 2026-08-13) — the jq below is the inline equivalent; if
+# bundle/make-meta.sh lands, replace the jq with a call to it.
+
+.sign-base:
+  stage: sign
+  tags: [signer]
+  # The signer runner uses the shell executor on a hardened VM, so no
+  # `image:` here. Required on the host: rauc >= 1.11, openssl, jq, mc,
+  # curl. Release key material lives only at /etc/atomic-signing/ (readable
+  # by the runner user, never exposed as CI variables):
+  #   release.cert.pem, release.key.pem, release-keyring.pem (root CA)
+  variables:
+    GIT_STRATEGY: none  # the signer never needs (or wants) the repo checkout
+    SIGNER_CERT: /etc/atomic-signing/release.cert.pem
+    SIGNER_KEY: /etc/atomic-signing/release.key.pem
+    SIGNER_KEYRING: /etc/atomic-signing/release-keyring.pem
+  # Deliberately NO `needs:` here — stage ordering must gate signing behind
+  # test:unit AND test:integration. A needs: link to device:bundle would
+  # start signing while tests are still running.
+  dependencies: []  # and no artifacts from earlier stages on the signer
+  script:
+    - >
+      mc alias set store "${BUNDLE_STORE_URL}"
+      "${BUNDLE_STORE_ACCESS_KEY}" "${BUNDLE_STORE_SECRET_KEY}"
+    - rm -rf work out && mkdir -p work out
+    - mc cp --recursive "store/${BUNDLE_STORE_BUCKET}/staging/${CI_PIPELINE_ID}/" work/
+    - |
+      set -eu
+      signer_fp="$(openssl x509 -in "${SIGNER_CERT}" -outform DER | sha256sum | awk '{print $1}')"
+      echo "release signing cert fingerprint: ${signer_fp}"
+      : > out/object-keys.txt
+      for machine_dir in work/*/; do
+        target="$(basename "${machine_dir}")"
+        # staging/<pipeline>/<TARGET>/ prefixes from ci/build-image.yml,
+        # mapped to the api.md hardware_type vocabulary.
+        case "${target}" in
+          rpi-cm4)    hardware_type="rpi-cm4" ;;
+          qemux86-64) hardware_type="x86_64-generic" ;;
+          *) echo "unknown staging target dir: ${target}" >&2; exit 1 ;;
+        esac
+        # Integrity: bytes in the store match what the build job produced.
+        (cd "${machine_dir}" && sha256sum -c staging-sha256.txt)
+        for staged in "${machine_dir}"*.raucb; do
+          # Provenance: staged bundle carries this pipeline's dev signature.
+          rauc info --keyring "${machine_dir}ci-keyring.pem" "${staged}" > /dev/null
+          version="$(rauc info --keyring "${machine_dir}ci-keyring.pem" \
+                       --output-format=json "${staged}" | jq -r '.version')"
+          out_name="acme-device-v1-${hardware_type}-${version}.raucb"
+          rauc resign \
+            --cert "${SIGNER_CERT}" --key "${SIGNER_KEY}" \
+            --keyring "${machine_dir}ci-keyring.pem" \
+            "${staged}" "out/${out_name}"
+          # Sanity: the re-signed bundle verifies against the release root.
+          rauc info --keyring "${SIGNER_KEYRING}" "out/${out_name}" > /dev/null
+          sha256="$(sha256sum "out/${out_name}" | awk '{print $1}')"
+          size="$(stat -c%s "out/${out_name}")"
+          jq -n \
+            --arg version "${version}" \
+            --arg hw "${hardware_type}" \
+            --arg sha "${sha256}" \
+            --argjson size "${size}" \
+            --arg fp "${signer_fp}" \
+            '{version: $version, hardware_type: $hw, sha256: $sha,
+              size_bytes: $size, signed_by: $fp}' \
+            > "out/${out_name}.meta.json"
+          mc cp "out/${out_name}" "out/${out_name}.meta.json" \
+            "store/${BUNDLE_STORE_BUCKET}/signed/"
+          echo "signed/${out_name}" >> out/object-keys.txt
+        done
+      done
+      jq -R . out/object-keys.txt | jq -s '{object_keys: .}' > publish-manifest.json
+      cat publish-manifest.json
+  artifacts:
+    paths:
+      - publish-manifest.json
+    expire_in: 1 week
+
+# dev channel: every main build is signed automatically (design.md §14:
+# "manual trigger for stable channel, automatic for dev").
+sign:dev:
+  extends: .sign-base
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# stable channel: release tags only, and a human presses the button.
+sign:stable:
+  extends: .sign-base
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/
+      when: manual
+  allow_failure: false  # manual gate blocks publish until signing ran
+
+.publish-base:
+  stage: publish
+  image: alpine:3.20
+  tags: [docker]
+  variables:
+    GIT_STRATEGY: none
+  # ATOMIC_ADMIN_URL / ATOMIC_ADMIN_USER / ATOMIC_ADMIN_PASSWORD are
+  # protected+masked CI variables (see ci/shared/runners.md).
+  before_script:
+    - apk add --no-cache curl jq
+  script:
+    # Register each signed object via the admin API (docs/api.md §2.3);
+    # 409 = already registered (the server-side 30 s poller may have won).
+    - |
+      set -eu
+      cookie_jar="$(mktemp)"
+      curl -fsS -c "${cookie_jar}" -X POST "${ATOMIC_ADMIN_URL}/admin/v1/login" \
+        -H 'Content-Type: application/json' \
+        -d "$(jq -n --arg u "${ATOMIC_ADMIN_USER}" --arg p "${ATOMIC_ADMIN_PASSWORD}" \
+               '{username: $u, password: $p}')"
+      if [ -s publish-manifest.json ]; then
+        jq -r '.object_keys[]' publish-manifest.json | while read -r key; do
+          code="$(curl -sS -o /tmp/resp.json -w '%{http_code}' -b "${cookie_jar}" \
+            -X POST "${ATOMIC_ADMIN_URL}/admin/v1/bundles" \
+            -H 'Content-Type: application/json' \
+            -d "$(jq -n --arg k "${key}" '{object_key: $k}')")"
+          case "${code}" in
+            201) echo "registered: ${key}" ;;
+            409) echo "already registered (poller won): ${key}" ;;
+            *)   echo "FAIL (${code}): ${key}" >&2; cat /tmp/resp.json >&2; exit 1 ;;
+          esac
+        done
+      else
+        # Fallback: force a poller pass over the signed/ prefix.
+        curl -fsS -b "${cookie_jar}" -X POST "${ATOMIC_ADMIN_URL}/admin/v1/bundles/scan"
+      fi
+      curl -fsS -b "${cookie_jar}" -X POST "${ATOMIC_ADMIN_URL}/admin/v1/logout"
+
+publish:dev:
+  extends: .publish-base
+  needs: [sign:dev]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+publish:stable:
+  extends: .publish-base
+  needs: [sign:stable]
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/

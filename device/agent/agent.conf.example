@@ -1,0 +1,51 @@
+# atomic-agent configuration — /etc/atomic-updater/agent.conf
+# Every key can be overridden with an ATOMIC_AGENT_<KEY> environment variable.
+
+# Fleet server (device API, mTLS listener).
+server_url = https://atomic-server:8443
+
+# Org root CA: pins the server TLS certificate. The same anchor validates
+# bundle signatures via RAUC's keyring.
+keyring = /etc/rauc/ca.cert.pem
+
+# Manufacturing identity flashed at the factory — used ONLY for first-boot
+# enrollment, inert afterwards (design doc §11.3).
+mfg_cert_file = /etc/atomic-updater/mfg.cert.pem
+mfg_key_file  = /etc/atomic-updater/mfg.key.pem
+
+# Device identity issued at enrollment (lives on the data partition so it
+# survives updates). Defaults derive from data_dir.
+#cert_file = /data/atomic-updater/identity/device.cert.pem
+#key_file  = /data/atomic-updater/identity/device.key.pem
+
+hardware_type = rpi-cm4
+serial = SN-CHANGE-ME
+
+data_dir = /data/atomic-updater
+version_file = /etc/bundle-version
+
+# Poll cadence: 60s with ±10s jitter (design doc §7.5).
+poll_interval = 60s
+poll_jitter = 10s
+
+# Abort a bundle download when no bytes arrive for this long; the partial
+# file is kept and resumed with a Range request on the next poll.
+download_stall_timeout = 60s
+
+# Retry transient install failures before reporting install-fail (which
+# permanently blocks the bundle for this device until operator action).
+install_retries = 2
+install_retry_delay = 10s
+
+# Reboot window, local time. Empty = reboot immediately after install.
+# Production devices: 02:00-04:00
+maintenance_window =
+
+reboot_cmd = systemctl reboot
+
+# Installer: default is the rauc CLI. rauc_extra_args is appended to every
+# rauc invocation (the container simulator passes --override-boot-slot=X).
+#rauc_extra_args =
+# Fallback installer for environments without loop-mount privileges — see
+# docs/security.md "degraded install path".
+#install_cmd = /usr/lib/atomic-updater/rauc-install-fallback.sh

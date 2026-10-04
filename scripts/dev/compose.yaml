@@ -1,0 +1,83 @@
+# Local development stack: Postgres + MinIO + atomic-server.
+#
+#   make pki
+#   docker compose -f scripts/dev/compose.yaml up --build
+#
+# Dashboard: http://localhost:8080  (admin / the password you hashed into
+# ATOMIC_ADMIN_PASSWORD_HASH below — default is "admin", dev only).
+
+name: atomic-dev
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: atomic
+      POSTGRES_PASSWORD: atomic
+      POSTGRES_DB: atomic
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atomic"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: atomicdev
+      MINIO_ROOT_PASSWORD: atomicdev-secret
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  server:
+    build:
+      context: ../..
+      dockerfile: server/Dockerfile
+    # Bind-mounted dev PKI keys are 0600/checkout-owned; run as root in dev.
+    # Production deployments provision secrets owned by the service user.
+    user: "0:0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    environment:
+      ATOMIC_DB_URL: postgres://atomic:atomic@postgres:5432/atomic?sslmode=disable
+      ATOMIC_S3_ENDPOINT: minio:9000
+      ATOMIC_S3_PUBLIC_ENDPOINT: localhost:9000
+      ATOMIC_S3_ACCESS_KEY: atomicdev
+      ATOMIC_S3_SECRET_KEY: atomicdev-secret
+      ATOMIC_S3_BUCKET: bundles
+      ATOMIC_TLS_CERT: /pki/server/server.cert.pem
+      ATOMIC_TLS_KEY: /pki/server/server.key.pem
+      ATOMIC_DEVICE_CA_CERT: /pki/device-ca/ca.cert.pem
+      ATOMIC_DEVICE_CA_KEY: /pki/device-ca/ca.key.pem
+      ATOMIC_MFG_CA_CERT: /pki/manufacturing/ca.cert.pem
+      ATOMIC_CA_CHAIN: /pki/ca-chain.pem
+      ATOMIC_ADMIN_USER: admin
+      # bcrypt("admin") — DEV ONLY. Generate your own:
+      #   go run ./server/cmd/atomic-server -hash-password 'yourpassword'
+      # ($$ escapes $ for compose variable interpolation)
+      ATOMIC_ADMIN_PASSWORD_HASH: $$2a$$10$$5Kx5eqYxTNEGwAPIsMU.3./1N62PQVhSmOJLjt6f7ISjBletvFnEO
+      ATOMIC_LOG_LEVEL: debug
+    volumes:
+      - ../../pki:/pki:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8443:8443"
+    deploy:
+      resources:
+        limits:
+          memory: 256M

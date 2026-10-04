@@ -1,0 +1,73 @@
+---
+# ci/build-image.yml — `build:device`: Yocto image + dev-signed RAUC bundle
+# per machine, uploaded to the staging/ prefix of the bundle store.
+#
+# NOTE: these jobs target the org's GitLab runners (`docker` class, tagged
+# `yocto-cache` — see ci/shared/runners.md); they are NOT runnable in this
+# development workspace. The job runs inside the upstream kas container
+# image — the same image that `kas-container build` wraps when building
+# device/meta-atomic/kas/*.yml locally — so plain `kas build` is used here.
+#
+# Signing model (docs/security.md §7): RAUC bundles are never unsigned.
+# This stage signs with an EPHEMERAL per-pipeline dev key created by
+# scripts/pki/bootstrap-dev-pki.sh; the `sign` stage re-signs with the
+# release certificate on the signer runner. Production devices do not trust
+# the ephemeral CI root, so a staging bundle can never reach a real device.
+
+include:
+  - local: ci/shared/sstate-cache.yml
+
+# TARGET is the product/hardware naming (matches api.md hardware_type
+# prefixes); YOCTO_MACHINE is the bitbake MACHINE the kas config sets.
+# They differ for the CM4: upstream meta-raspberrypi has no
+# "raspberrypi-cm4" machine — the CM4 builds as raspberrypi4-64 (see the
+# machine-naming note in device/meta-atomic/kas/atomic-rpi-cm4.yml).
+device:bundle:
+  stage: build:device
+  extends: .yocto-s3-cache
+  image: ghcr.io/siemens/kas/kas:4.4
+  tags: [docker, yocto-cache]
+  interruptible: true
+  parallel:
+    matrix:
+      - TARGET: rpi-cm4
+        YOCTO_MACHINE: raspberrypi4-64
+      - TARGET: qemux86-64
+        YOCTO_MACHINE: qemux86-64
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/
+  variables:
+    KAS_WORK_DIR: $CI_PROJECT_DIR/build
+    # Ephemeral CI dev-signing material, created in before_script. The kas
+    # configs declare these in their `env:` block, so kas forwards them to
+    # bitbake (consumed by meta-rauc's bundle.bbclass + rauc bbappend).
+    RAUC_KEY_FILE: $CI_PROJECT_DIR/pki/bundle/bundle.key.pem
+    RAUC_CERT_FILE: $CI_PROJECT_DIR/pki/bundle/bundle.cert.pem
+    RAUC_KEYRING_FILE: $CI_PROJECT_DIR/pki/keyring.pem
+  before_script:
+    - scripts/pki/bootstrap-dev-pki.sh
+  script:
+    # Bundle version comes from the atomic-bundle recipe (PV); wiring
+    # CI_COMMIT_TAG → PV is a TODO in device/meta-atomic. The sign stage
+    # reads the authoritative version from the bundle manifest either way.
+    - kas build "device/meta-atomic/kas/atomic-${TARGET}.yml"
+    - DEPLOY="build/tmp/deploy/images/${YOCTO_MACHINE}"
+    - ls -lh "${DEPLOY}"/*.raucb
+    - (cd "${DEPLOY}" && sha256sum -- *.raucb) > staging-sha256.txt
+    # Upload bundle + integrity manifest + the pipeline's dev keyring to
+    # staging/<pipeline>/<target>/ — the sign stage verifies against both.
+    - curl -fsSL -o /tmp/mc https://dl.min.io/client/mc/release/linux-amd64/mc
+    - chmod +x /tmp/mc
+    - >
+      /tmp/mc alias set store "${BUNDLE_STORE_URL}"
+      "${BUNDLE_STORE_ACCESS_KEY}" "${BUNDLE_STORE_SECRET_KEY}"
+    - STAGING="store/${BUNDLE_STORE_BUCKET}/staging/${CI_PIPELINE_ID}/${TARGET}"
+    - /tmp/mc cp "${DEPLOY}"/*.raucb "${STAGING}/"
+    - /tmp/mc cp staging-sha256.txt "${STAGING}/"
+    - /tmp/mc cp pki/keyring.pem "${STAGING}/ci-keyring.pem"
+  artifacts:
+    paths:
+      - staging-sha256.txt
+    expire_in: 1 week

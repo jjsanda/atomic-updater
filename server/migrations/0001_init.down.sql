@@ -1,0 +1,6 @@
+DROP TABLE IF EXISTS admin_sessions;
+DROP TABLE IF EXISTS revoked_certs;
+DROP TABLE IF EXISTS device_events;
+DROP TABLE IF EXISTS rollouts;
+DROP TABLE IF EXISTS devices;
+DROP TABLE IF EXISTS bundles;

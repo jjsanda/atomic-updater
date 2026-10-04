@@ -1,0 +1,8 @@
+#!/bin/bash
+# fw_setenv shim: atomic-health calls `fw_setenv BOOT_<slot>_LEFT 3` exactly
+# like on real hardware (design doc §7.4); here it lands in the simulated
+# U-Boot environment file.
+set -euo pipefail
+source /usr/lib/atomic-updater/sim-env.sh
+[[ $# -ge 1 ]] || { echo "usage: fw_setenv <key> [value]" >&2; exit 1; }
+env_set "$1" "${2:-}"

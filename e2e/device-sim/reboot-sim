@@ -1,0 +1,8 @@
+#!/bin/bash
+# "reboot" for the simulator: kill the current boot's process group. The
+# supervisor (PID 1) notices and starts the next boot, which re-runs the
+# U-Boot slot-selection logic. Both atomic-health (ATOMIC_REBOOT_CMD) and the
+# agent (reboot_cmd) call this.
+pgid="$(cat /run/boot.pgid 2>/dev/null)" || exit 1
+echo "[reboot-sim] power-cycling boot pgid $pgid"
+exec kill -KILL -- "-$pgid"

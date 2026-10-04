@@ -1,0 +1,100 @@
+---
+# ci/build-server.yml — `build:server` (multi-arch container image) and
+# `test:unit` (both Go modules, coverage-gated at 80%, design.md §14).
+#
+# NOTE: these jobs target the org's GitLab runners (`dind` class for buildx,
+# `docker` class for unit tests — see ci/shared/runners.md); they are NOT
+# runnable in this development workspace.
+
+server:image:
+  stage: build:server
+  image: docker:27
+  services:
+    - docker:27-dind
+  tags: [dind]
+  interruptible: true
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    IMAGE: $CI_REGISTRY_IMAGE/atomic-server
+  rules:
+    # MRs: single-arch smoke build, nothing pushed.
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      variables:
+        PLATFORMS: linux/amd64
+        OUTPUT: --load
+    - if: $CI_COMMIT_BRANCH == "main"
+      variables:
+        PLATFORMS: linux/amd64,linux/arm64
+        OUTPUT: --push
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/
+      variables:
+        PLATFORMS: linux/amd64,linux/arm64
+        OUTPUT: --push
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    # binfmt/QEMU emulation for the arm64 half of the multi-arch build.
+    - docker run --privileged --rm tonistiigi/binfmt --install arm64
+    - docker buildx create --use --name atomic-builder
+  script:
+    # server/Dockerfile is multi-stage (UI build → Go build → runtime); the
+    # Go binary is pure Go, so cross-building via buildx TARGETARCH is cheap.
+    - |
+      TAGS="--tag ${IMAGE}:${CI_COMMIT_SHORT_SHA}"
+      if [ "${CI_COMMIT_BRANCH:-}" = "main" ]; then
+        TAGS="${TAGS} --tag ${IMAGE}:main"
+      fi
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        TAGS="${TAGS} --tag ${IMAGE}:${CI_COMMIT_TAG#v}"
+      fi
+      # shellcheck disable=SC2086  # TAGS/OUTPUT are intentionally word-split
+      docker buildx build --file server/Dockerfile \
+        --platform "${PLATFORMS}" ${TAGS} ${OUTPUT} .
+
+.go-unit:
+  stage: test:unit
+  image: golang:1.22-bookworm
+  tags: [docker]
+  interruptible: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/
+  variables:
+    GOMODCACHE: $CI_PROJECT_DIR/.cache/go-mod
+    GOCACHE: $CI_PROJECT_DIR/.cache/go-build
+    COVER_MIN: "80"
+  cache:
+    key: go-unit
+    paths:
+      - .cache/
+  script:
+    - cd "${MODULE_DIR}"
+    - go build ./...
+    - go test -race -covermode=atomic -coverprofile=coverage.out ./...
+    - go tool cover -func=coverage.out | tee coverage-func.txt
+    # Hard-fail below COVER_MIN% total statement coverage (design.md §14:
+    # "coverage report (fail below 80%)").
+    - |
+      total="$(awk '/^total:/ {gsub(/%/, "", $3); print $3}' coverage-func.txt)"
+      echo "total statement coverage: ${total}% (minimum ${COVER_MIN}%)"
+      awk -v t="${total}" -v min="${COVER_MIN}" \
+        'BEGIN { exit (t + 0 >= min + 0) ? 0 : 1 }' \
+        || { echo "FAIL: coverage ${total}% is below ${COVER_MIN}%" >&2; exit 1; }
+  coverage: '/total:\s+\(statements\)\s+\d+.\d+%/'
+  artifacts:
+    when: always
+    paths:
+      - ${MODULE_DIR}/coverage.out
+      - ${MODULE_DIR}/coverage-func.txt
+    expire_in: 1 week
+
+unit:server:
+  extends: .go-unit
+  variables:
+    MODULE_DIR: server
+
+unit:agent:
+  extends: .go-unit
+  variables:
+    MODULE_DIR: device/agent

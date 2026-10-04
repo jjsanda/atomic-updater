@@ -1,0 +1,27 @@
+# NOTE: authored for the org CI runners; NOT built/validated in this workspace.
+# Writable overlay over the read-only /etc (design.md §7.1). The lower layer
+# is the pristine /etc from the current rootfs slot; upper/work live on the
+# data partition and survive A/B switches.
+#
+# MVP caveat (documented): the overlay is established during the systemd
+# transaction, ordered Before=local-fs.target — services started earlier
+# (and systemd itself while parsing /etc at early boot) see the pristine
+# read-only /etc. If that ever bites, the production fix is to move this
+# mount into the initramfs. Accepted for the MVP.
+
+[Unit]
+Description=Writable overlay on /etc from /data
+DefaultDependencies=no
+Conflicts=umount.target
+Requires=data.mount atomic-data-seed.service
+After=data.mount atomic-data-seed.service
+Before=local-fs.target umount.target
+
+[Mount]
+What=overlay
+Where=/etc
+Type=overlay
+Options=lowerdir=/etc,upperdir=/data/overlays/etc/upper,workdir=/data/overlays/etc/work
+
+[Install]
+WantedBy=local-fs.target

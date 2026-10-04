@@ -1,0 +1,72 @@
+# Infrastructure for the e2e OTA suite: Postgres + MinIO + atomic-server.
+# Device simulators are NOT compose services — the Go harness starts them
+# individually with docker run (per-test lifecycle, targeted network chaos).
+#
+# Managed by the harness:  ATOMIC_E2E=1 go test ./...   (or `make e2e`)
+
+name: atomic-e2e
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: atomic
+      POSTGRES_PASSWORD: atomic
+      POSTGRES_DB: atomic
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atomic"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    mem_limit: 512m
+
+  minio:
+    image: minio/minio:latest
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: atomicdev
+      MINIO_ROOT_PASSWORD: atomicdev-secret
+    mem_limit: 384m
+
+  server:
+    build:
+      context: ../
+      dockerfile: server/Dockerfile
+    image: atomic-updater/server:e2e
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    networks:
+      default:
+        aliases:
+          - atomic-server   # matches the SAN in pki/server/server.cert.pem
+    # The image defaults to a non-root user; the bind-mounted dev PKI keys are
+    # 0600 and owned by the checkout owner, so the e2e stack runs as root.
+    # Production deployments provision secrets owned by the service user.
+    user: "0:0"
+    environment:
+      ATOMIC_DB_URL: postgres://atomic:atomic@postgres:5432/atomic?sslmode=disable
+      ATOMIC_S3_ENDPOINT: minio:9000
+      ATOMIC_S3_PUBLIC_ENDPOINT: minio:9000
+      ATOMIC_S3_ACCESS_KEY: atomicdev
+      ATOMIC_S3_SECRET_KEY: atomicdev-secret
+      ATOMIC_S3_BUCKET: bundles
+      ATOMIC_TLS_CERT: /pki/server/server.cert.pem
+      ATOMIC_TLS_KEY: /pki/server/server.key.pem
+      ATOMIC_DEVICE_CA_CERT: /pki/device-ca/ca.cert.pem
+      ATOMIC_DEVICE_CA_KEY: /pki/device-ca/ca.key.pem
+      ATOMIC_MFG_CA_CERT: /pki/manufacturing/ca.cert.pem
+      ATOMIC_CA_CHAIN: /pki/ca-chain.pem
+      ATOMIC_ADMIN_USER: admin
+      # bcrypt("admin") — e2e only ($$ escapes compose interpolation)
+      ATOMIC_ADMIN_PASSWORD_HASH: $$2a$$10$$5Kx5eqYxTNEGwAPIsMU.3./1N62PQVhSmOJLjt6f7ISjBletvFnEO
+      ATOMIC_BUNDLE_POLL_INTERVAL: 5s
+      ATOMIC_LOG_LEVEL: debug
+    volumes:
+      - ../pki:/pki:ro
+    ports:
+      - "127.0.0.1:18080:8080"
+      - "127.0.0.1:18443:8443"
+    mem_limit: 384m

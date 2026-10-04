@@ -1,0 +1,5 @@
+#!/bin/sh
+# Fake rauc: records the invocation, exits per FAKE_RAUC_EXIT.
+if [ $# -gt 0 ]; then line="rauc $*"; else line="rauc"; fi
+echo "$line" >> "${FAKE_LOG:?FAKE_LOG not set}"
+exit "${FAKE_RAUC_EXIT:-0}"
